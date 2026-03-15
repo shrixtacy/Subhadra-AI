@@ -1,0 +1,65 @@
+# Subhadra SLM — Central Configuration
+
+tokenizer:
+  vocab_size: 32000
+  model_prefix: tokenizer/odia_spm
+  character_coverage: 0.9999
+  model_type: bpe
+  special_tokens:
+    - "<pad>"
+    - "<unk>"
+    - "<bos>"
+    - "<eos>"
+    - "<sep>"
+
+data:
+  indiccorp_lang: or
+  cc100_lang: or
+  raw_dir: data/raw
+  clean_dir: data/clean
+
+model:
+  n_layers: 8
+  d_model: 512
+  n_heads: 8
+  d_ff: 2048
+  max_seq_len: 1024
+  vocab_size: 32000
+  dropout: 0.1
+
+pretrain:
+  batch_size: 16
+  lr: 3e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  warmup_steps: 2000
+  max_steps: 100000
+  grad_clip: 1.0
+  log_every: 100
+  save_every: 1000
+  checkpoint_dir: train/checkpoints
+  target_loss: 2.5
+
+sft:
+  lr: 1e-5
+  epochs: 3
+  batch_size: 8
+  checkpoint_dir: train/sft_checkpoints
+  data_path: data/odia_sft.jsonl
+
+stt:
+  base_model: openai/whisper-small
+  language: or
+  max_steps: 4000
+  batch_size: 8
+  output_dir: stt/whisper_odia
+
+tts:
+  sample_rate: 22050
+  batch_size: 16
+  epochs: 1000
+  output_dir: tts/vits_odia
+
+api:
+  host: 0.0.0.0
+  port: 8000

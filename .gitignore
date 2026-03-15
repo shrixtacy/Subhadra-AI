@@ -1,0 +1,34 @@
+# Virtual environment
+.venv312/
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Model weights & large files
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Large data files (too big for GitHub)
+data/raw/
+data/clean/
+data/*.jsonl
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
