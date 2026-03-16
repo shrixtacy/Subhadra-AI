@@ -1,8 +1,8 @@
-﻿﻿"""
+﻿"""
 Subhadra pretraining loop.
   - Streaming IterableDataset with sliding-window 1024-token chunks (cycles corpus)
   - AdamW + cosine LR with warmup
-  - Mixed precision (torch.amp ΓÇö works on both CUDA and CPU)
+  - Mixed precision (torch.amp - works on both CUDA and CPU)
   - Gradient clipping at 1.0
   - Checkpoint save/resume (keeps last 3)
   - WandB logging (optional, skipped gracefully if not installed)
@@ -30,7 +30,7 @@ from tokenizer.odia_tokenizer import OdiaTokenizer
 
 
 # ---------------------------------------------------------------------------
-# Dataset ΓÇö cycles corpus indefinitely so training can reach max_steps
+# Dataset - cycles corpus indefinitely so training can reach max_steps
 # ---------------------------------------------------------------------------
 
 class OdiaTextDataset(IterableDataset):
@@ -67,7 +67,7 @@ class OdiaTextDataset(IterableDataset):
 
 
 # ---------------------------------------------------------------------------
-# LR schedule ΓÇö cosine with linear warmup
+# LR schedule - cosine with linear warmup
 # ---------------------------------------------------------------------------
 
 def cosine_lr(step: int, warmup: int, max_steps: int, max_lr: float,
@@ -171,7 +171,7 @@ def train(cfg_path: str | Path | None = None) -> None:
     last_loss    = 0.0
     t0           = time.time()
 
-    print(f"\nPretraining from step {step} → {pt['max_steps']}  "
+    print(f"\nPretraining from step {step} to {pt['max_steps']}  "
           f"(target loss < {pt['target_loss']})\n")
 
     model.train()
@@ -227,7 +227,6 @@ def train(cfg_path: str | Path | None = None) -> None:
     # final checkpoint
     save_checkpoint(model, optimizer, step, last_loss, ckpt_dir)
     print("\nPretraining complete.")
-
 
 
 if __name__ == "__main__":
