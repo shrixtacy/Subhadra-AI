@@ -97,7 +97,7 @@ def main(cfg_path: str | Path | None = None) -> None:
             batch["input_features"] = feature_extractor(
                 array, sampling_rate=sr
             ).input_features[0]
-            batch["labels"] = tokenizer(batch[text_col]).input_ids
+            batch["labels"] = tokenizer(batch[text_col], max_length=448, truncation=True).input_ids
         except Exception:
             batch["input_features"] = None
             batch["labels"] = None
