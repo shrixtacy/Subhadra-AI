@@ -80,7 +80,6 @@ def main(cfg_path: str | Path | None = None) -> None:
     # --- dataset ---
     print("Loading AI4Bharat Shrutilipi Odia dataset...")
     raw = load_dataset("ai4bharat/shrutilipi", "odia")
-    raw = raw.cast_column("audio", Audio(sampling_rate=16000))
 
     train_cols = raw["train"].column_names
     text_col = next((c for c in ("sentence", "text", "transcription") if c in train_cols), None)
@@ -89,15 +88,19 @@ def main(cfg_path: str | Path | None = None) -> None:
     print(f"Transcript column: '{text_col}'")
 
     def prepare(batch: dict) -> dict:
-        audio = batch["audio"]
-        if audio is None or audio.get("array") is None:
+        try:
+            decoder = batch["audio_filepath"]
+            audio_samples = decoder.get_all_samples()
+            # data shape: [channels, samples] — take first channel, convert to numpy
+            array = audio_samples.data[0].numpy()
+            sr = audio_samples.sample_rate
+            batch["input_features"] = feature_extractor(
+                array, sampling_rate=sr
+            ).input_features[0]
+            batch["labels"] = tokenizer(batch[text_col]).input_ids
+        except Exception:
             batch["input_features"] = None
             batch["labels"] = None
-            return batch
-        batch["input_features"] = feature_extractor(
-            audio["array"], sampling_rate=audio["sampling_rate"]
-        ).input_features[0]
-        batch["labels"] = tokenizer(batch[text_col]).input_ids
         return batch
 
     remove_cols = raw["train"].column_names
