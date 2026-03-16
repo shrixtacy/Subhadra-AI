@@ -109,6 +109,7 @@ def train_sft(cfg_path: str | Path | None = None) -> None:
         cfg = yaml.safe_load(f)
 
     sft = cfg["sft"]
+    sft["lr"] = float(sft["lr"])
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
     device      = torch.device(device_type)
     print(f"Device: {device}")

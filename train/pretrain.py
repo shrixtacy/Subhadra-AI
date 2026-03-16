@@ -124,6 +124,9 @@ def train(cfg_path: str | Path | None = None) -> None:
         cfg = yaml.safe_load(f)
 
     pt   = cfg["pretrain"]
+    pt["lr"] = float(pt["lr"])
+    pt["weight_decay"] = float(pt["weight_decay"])
+    pt["grad_clip"] = float(pt["grad_clip"])
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
     device      = torch.device(device_type)
     print(f"Device: {device}")
