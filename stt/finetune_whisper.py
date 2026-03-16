@@ -81,6 +81,12 @@ def main(cfg_path: str | Path | None = None) -> None:
     print("Loading AI4Bharat Shrutilipi Odia dataset...")
     raw = load_dataset("ai4bharat/shrutilipi", "odia")
 
+    # Limit to 5000 samples to avoid OOM and long processing times
+    max_samples = stt_cfg.get("max_train_samples", 5000)
+    if len(raw["train"]) > max_samples:
+        raw["train"] = raw["train"].select(range(max_samples))
+        print(f"Limited to {max_samples} training samples")
+
     train_cols = raw["train"].column_names
     text_col = next((c for c in ("sentence", "text", "transcription") if c in train_cols), None)
     if text_col is None:
