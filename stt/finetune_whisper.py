@@ -1,8 +1,7 @@
 """
 Fine-tune openai/whisper-small on AI4Bharat Shrutilipi Odia ASR dataset.
   - Base model : openai/whisper-small  (Apache 2.0)
-  - Dataset    : ai4bharat/shrutilipi, language="or"
-  - Target lang: Odia (ISO 639-1: "or")
+  - Dataset    : ai4bharat/shrutilipi, config="odia"
   - Trainer    : HuggingFace Seq2SeqTrainer
   - Metric     : WER (word error rate)
   - Output     : stt/whisper_odia/
@@ -17,7 +16,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 import torch
-import numpy as np
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -30,43 +28,27 @@ def load_config(cfg_path: str | Path | None = None) -> dict:
         return yaml.safe_load(f)
 
 
-# ---------------------------------------------------------------------------
-# Data collator — pads audio features + label token ids
-# ---------------------------------------------------------------------------
-
 @dataclass
 class DataCollatorSpeechSeq2SeqWithPadding:
-    processor: Any   # WhisperProcessor
+    processor: Any
 
     def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # Pad log-mel input features
         input_features = [{"input_features": f["input_features"]} for f in features]
-        batch = self.processor.feature_extractor.pad(
-            input_features, return_tensors="pt"
-        )
+        batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
 
-        # Pad label token ids; replace padding with -100 so loss ignores them
         label_features = [{"input_ids": f["labels"]} for f in features]
-        labels_batch   = self.processor.tokenizer.pad(
-            label_features, return_tensors="pt"
-        )
+        labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
         labels = labels_batch["input_ids"].masked_fill(
             labels_batch.attention_mask.ne(1), -100
         )
-        # Strip leading BOS if the tokenizer prepended it
         if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all().item():
             labels = labels[:, 1:]
-
         batch["labels"] = labels
         return batch
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main(cfg_path: str | Path | None = None) -> None:
-    from datasets import load_dataset, Audio
+    from datasets import load_dataset, Audio, DatasetDict
     from transformers import (
         WhisperFeatureExtractor,
         WhisperTokenizer,
@@ -77,56 +59,41 @@ def main(cfg_path: str | Path | None = None) -> None:
     )
     import evaluate
 
-    cfg     = load_config(cfg_path)
+    cfg = load_config(cfg_path)
     stt_cfg = cfg["stt"]
-    device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_fp16 = (device.type == "cuda")
     print(f"Device: {device}  |  fp16: {use_fp16}")
 
-    base_model = stt_cfg["base_model"]   # "openai/whisper-small"
+    base_model = stt_cfg["base_model"]
     output_dir = str(ROOT / stt_cfg["output_dir"])
 
-    # --- processor & model ---
+    # --- processor & model (no language= to avoid Odia not supported error) ---
     feature_extractor = WhisperFeatureExtractor.from_pretrained(base_model)
-    tokenizer = WhisperTokenizer.from_pretrained(
-        base_model, language="Odia", task="transcribe"
-    )
-    processor = WhisperProcessor.from_pretrained(
-        base_model, language="Odia", task="transcribe"
-    )
+    tokenizer = WhisperTokenizer.from_pretrained(base_model)
+    processor = WhisperProcessor.from_pretrained(base_model)
     model = WhisperForConditionalGeneration.from_pretrained(base_model)
     model.config.forced_decoder_ids = None
-    model.config.suppress_tokens    = []
-    # Disable gradient checkpointing reentrant warning on PyTorch 2.x
+    model.config.suppress_tokens = []
     model.config.use_cache = False
 
     # --- dataset ---
     print("Loading AI4Bharat Shrutilipi Odia dataset...")
-    try:
-        raw = load_dataset(
-            "ai4bharat/shrutilipi",
-            "or",
-            trust_remote_code=True,
-        )
-    except Exception as e:
-        print(f"Primary dataset load failed ({e})\nTrying fallback split name...")
-        raw = load_dataset(
-            "ai4bharat/shrutilipi",
-            trust_remote_code=True,
-        )
-
-    # Resample audio to 16 kHz
+    raw = load_dataset("ai4bharat/shrutilipi", "odia")
     raw = raw.cast_column("audio", Audio(sampling_rate=16000))
 
-    # Detect transcript column name (varies: "sentence" / "text" / "transcription")
     train_cols = raw["train"].column_names
-    text_col   = next((c for c in ("sentence", "text", "transcription") if c in train_cols), None)
+    text_col = next((c for c in ("sentence", "text", "transcription") if c in train_cols), None)
     if text_col is None:
-        raise ValueError(f"Cannot find transcript column. Available: {train_cols}")
+        raise ValueError(f"No transcript column found. Available: {train_cols}")
     print(f"Transcript column: '{text_col}'")
 
     def prepare(batch: dict) -> dict:
         audio = batch["audio"]
+        if audio is None or audio.get("array") is None:
+            batch["input_features"] = None
+            batch["labels"] = None
+            return batch
         batch["input_features"] = feature_extractor(
             audio["array"], sampling_rate=audio["sampling_rate"]
         ).input_features[0]
@@ -135,28 +102,31 @@ def main(cfg_path: str | Path | None = None) -> None:
 
     remove_cols = raw["train"].column_names
     raw = raw.map(prepare, remove_columns=remove_cols, num_proc=1)
+    raw = raw.filter(lambda x: x["input_features"] is not None and x["labels"] is not None)
 
-    # Build eval split — use "validation" if present, else last 5% of train
+    print(f"Dataset size after filtering: {len(raw['train'])} train samples")
+
+    # --- eval split ---
     if "validation" in raw:
         eval_ds = raw["validation"]
     elif "test" in raw:
         eval_ds = raw["test"]
     else:
-        n_eval  = max(200, len(raw["train"]) // 20)
+        n_eval = max(200, len(raw["train"]) // 20)
         eval_ds = raw["train"].select(range(len(raw["train"]) - n_eval, len(raw["train"])))
-        raw     = raw["train"].select(range(len(raw["train"]) - n_eval))
-        # wrap back so train_dataset is consistent
-        from datasets import DatasetDict
-        raw = DatasetDict({"train": raw, "validation": eval_ds})
+        train_ds = raw["train"].select(range(len(raw["train"]) - n_eval))
+        raw = DatasetDict({"train": train_ds, "validation": eval_ds})
+
+    print(f"Train: {len(raw['train'])}  |  Eval: {len(eval_ds)}")
 
     # --- WER metric ---
     wer_metric = evaluate.load("wer")
 
     def compute_metrics(pred: Any) -> Dict[str, float]:
-        pred_ids  = pred.predictions
+        pred_ids = pred.predictions
         label_ids = pred.label_ids
         label_ids[label_ids == -100] = tokenizer.pad_token_id
-        pred_str  = tokenizer.batch_decode(pred_ids,  skip_special_tokens=True)
+        pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         label_str = tokenizer.batch_decode(label_ids, skip_special_tokens=True)
         return {"wer": wer_metric.compute(predictions=pred_str, references=label_str)}
 
@@ -165,7 +135,7 @@ def main(cfg_path: str | Path | None = None) -> None:
         output_dir=output_dir,
         per_device_train_batch_size=stt_cfg["batch_size"],
         per_device_eval_batch_size=stt_cfg["batch_size"],
-        gradient_accumulation_steps=2,          # effective batch = batch_size × 2
+        gradient_accumulation_steps=2,
         learning_rate=1e-5,
         warmup_steps=500,
         max_steps=stt_cfg["max_steps"],
@@ -173,7 +143,7 @@ def main(cfg_path: str | Path | None = None) -> None:
         gradient_checkpointing_kwargs={"use_reentrant": False},
         fp16=use_fp16,
         bf16=False,
-        eval_strategy="steps",                  # renamed from evaluation_strategy in 4.41+
+        eval_strategy="steps",
         eval_steps=500,
         save_steps=500,
         save_total_limit=3,
@@ -194,7 +164,7 @@ def main(cfg_path: str | Path | None = None) -> None:
         args=training_args,
         train_dataset=raw["train"],
         eval_dataset=eval_ds,
-        processing_class=processor,             # replaces deprecated tokenizer= arg
+        processing_class=processor,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
     )
