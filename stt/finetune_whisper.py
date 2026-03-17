@@ -49,6 +49,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
 
 def main(cfg_path: str | Path | None = None) -> None:
     from datasets import load_dataset, Audio, DatasetDict
+    import os
     from transformers import (
         WhisperFeatureExtractor,
         WhisperTokenizer,
@@ -74,8 +75,8 @@ def main(cfg_path: str | Path | None = None) -> None:
     processor = WhisperProcessor.from_pretrained(base_model)
     model = WhisperForConditionalGeneration.from_pretrained(base_model)
     model.config.forced_decoder_ids = None
-    model.config.suppress_tokens = []
-    model.config.use_cache = False
+    model.generation_config.forced_decoder_ids = None
+    model.generation_config.suppress_tokens = []
 
     # --- dataset ---
     print("Loading AI4Bharat Shrutilipi Odia dataset...")
@@ -153,8 +154,8 @@ def main(cfg_path: str | Path | None = None) -> None:
         fp16=use_fp16,
         bf16=False,
         eval_strategy="steps",
-        eval_steps=500,
-        save_steps=500,
+        eval_steps=1000,
+        save_steps=1000,
         save_total_limit=3,
         logging_steps=100,
         load_best_model_at_end=True,
@@ -179,7 +180,13 @@ def main(cfg_path: str | Path | None = None) -> None:
     )
 
     print(f"Starting Whisper fine-tuning for {stt_cfg['max_steps']} steps...")
-    trainer.train()
+    # Resume from latest checkpoint if available
+    import glob
+    ckpts = sorted(glob.glob(os.path.join(output_dir, "checkpoint-*")))
+    resume = ckpts[-1] if ckpts else None
+    if resume:
+        print(f"Resuming from {resume}")
+    trainer.train(resume_from_checkpoint=resume)
 
     trainer.save_model(output_dir)
     processor.save_pretrained(output_dir)
