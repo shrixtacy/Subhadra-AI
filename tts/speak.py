@@ -39,7 +39,7 @@ class OdiaTTS:
             model_id = str(model_dir)
             print(f"Loading fine-tuned TTS from {model_dir}")
         else:
-            model_id = "facebook/mms-tts-ori"
+            model_id = "facebook/mms-tts-ory"
             print(f"Fine-tuned model not found, using base: {model_id}")
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"

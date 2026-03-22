@@ -101,7 +101,7 @@ def main(cfg_path: str | Path | None = None) -> None:
     print(f"Device: {device}")
 
     # Use Facebook MMS Odia TTS as base model (works on Python 3.12)
-    base_model = "facebook/mms-tts-ori"
+    base_model = "facebook/mms-tts-ory"
     print(f"Loading base model: {base_model}")
 
     tokenizer = VitsTokenizer.from_pretrained(base_model)
