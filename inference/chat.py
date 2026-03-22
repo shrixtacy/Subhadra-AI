@@ -130,10 +130,9 @@ def main() -> None:
                 os.unlink(tmp_path)
                 print(f"ଆପଣ (ଭଏସ): {prompt}")
 
-            reply = generate(model, tok, prompt, devi
-ce,
-                          max_new_tokens=args.max_tokens,
-                          temperature=args.temperature)
+            reply = generate(model, tok, prompt, device,
+                             max_new_tokens=args.max_tokens,
+                             temperature=args.temperature)
             print(f"ସୁଭଦ୍ରା: {reply}\n")
 
             if voice_mode and tts is not None:
