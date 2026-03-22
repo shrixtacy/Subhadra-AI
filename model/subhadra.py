@@ -239,7 +239,7 @@ class SubhadraForCausalLM(nn.Module):
         top_k: int = 50,
         top_p: float = 0.9,
         eos_id: int = 3,
-        repetition_penalty: float = 1.3,
+        repetition_penalty: float = 1.5,
     ) -> torch.Tensor:
         """
         Autoregressive generation with temperature + top-k + top-p (nucleus) sampling
