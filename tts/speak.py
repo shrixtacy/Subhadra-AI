@@ -1,5 +1,5 @@
 """
-Odia TTS — uses ai4bharat/indic-parler-tts for female Odia voice.
+Odia TTS — uses facebook/mms-tts-ory with pitch shifting for female voice.
 
   OdiaTTS.speak(text, output_path)  -> saves .wav file
   OdiaTTS.speak_stream(text)        -> returns WAV bytes for streaming
@@ -23,29 +23,40 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-class OdiaTTS:
-    """Indic Parler-TTS wrapper for female Odia speech synthesis."""
+def _pitch_shift(audio: np.ndarray, sr: int, semitones: float = 4.0) -> np.ndarray:
+    """Shift pitch up by N semitones using resampling trick (no librosa needed)."""
+    factor = 2 ** (semitones / 12.0)
+    # Speed up by factor (raises pitch), then resample back to original length
+    original_len = len(audio)
+    indices = np.linspace(0, original_len - 1, int(original_len / factor))
+    shifted = np.interp(indices, np.arange(original_len), audio)
+    # Resample back to original length
+    result_indices = np.linspace(0, len(shifted) - 1, original_len)
+    return np.interp(result_indices, np.arange(len(shifted)), shifted).astype(np.float32)
 
-    VOICE_PROMPT = (
-        "A female speaker with a clear, pleasant voice delivers the text "
-        "at a moderate pace in Odia language."
-    )
+
+class OdiaTTS:
+    """MMS VITS Odia TTS with pitch shift for female-sounding voice."""
 
     def __init__(self, model_dir: str | Path | None = None) -> None:
-        from parler_tts import ParlerTTSForConditionalGeneration
-        from transformers import AutoTokenizer
+        from transformers import VitsModel, VitsTokenizer
 
         cfg = _load_config()
-        self.sample_rate = cfg["tts"]["sample_rate"]
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if model_dir is None:
+            model_dir = ROOT / cfg["tts"]["output_dir"]
+        model_dir = Path(model_dir)
 
-        model_id = "ai4bharat/indic-parler-tts"
-        print(f"Loading Indic Parler-TTS from {model_id}...")
-        self.model = ParlerTTSForConditionalGeneration.from_pretrained(model_id).to(self.device)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.desc_tokenizer = AutoTokenizer.from_pretrained(
-            self.model.config.text_encoder._name_or_path
-        )
+        if model_dir.exists() and (model_dir / "config.json").exists():
+            model_id = str(model_dir)
+            print(f"Loading TTS from {model_dir}")
+        else:
+            model_id = "facebook/mms-tts-ory"
+            print(f"Loading base TTS: {model_id}")
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.sample_rate = cfg["tts"]["sample_rate"]
+        self.tokenizer = VitsTokenizer.from_pretrained(model_id)
+        self.model = VitsModel.from_pretrained(model_id).to(self.device)
         self.model.eval()
         print(f"OdiaTTS ready  [{self.device}]")
 
@@ -66,20 +77,13 @@ class OdiaTTS:
         return buf.read()
 
     def _synthesize(self, text: str):
-        desc_inputs = self.desc_tokenizer(
-            self.VOICE_PROMPT, return_tensors="pt"
-        ).to(self.device)
-        text_inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
-
+        inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
         with torch.no_grad():
-            gen = self.model.generate(
-                input_ids=desc_inputs.input_ids,
-                attention_mask=desc_inputs.attention_mask,
-                prompt_input_ids=text_inputs.input_ids,
-                prompt_attention_mask=text_inputs.attention_mask,
-            )
-        wav = gen.cpu().numpy().squeeze().astype(np.float32)
+            output = self.model(**inputs)
+        wav = output.waveform[0].cpu().numpy().astype(np.float32)
         sr = self.model.config.sampling_rate
+        # Shift pitch up 4 semitones for female-sounding voice
+        wav = _pitch_shift(wav, sr, semitones=4.0)
         return wav, sr
 
 
