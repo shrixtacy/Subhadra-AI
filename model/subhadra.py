@@ -239,9 +239,11 @@ class SubhadraForCausalLM(nn.Module):
         top_k: int = 50,
         top_p: float = 0.9,
         eos_id: int = 3,
+        repetition_penalty: float = 1.3,
     ) -> torch.Tensor:
         """
-        Autoregressive generation with temperature + top-k + top-p (nucleus) sampling.
+        Autoregressive generation with temperature + top-k + top-p (nucleus) sampling
+        and repetition penalty.
         input_ids : (1, T) — prompt token IDs
         Returns   : (1, T + generated_len)
         """
@@ -250,6 +252,14 @@ class SubhadraForCausalLM(nn.Module):
             ctx = input_ids[:, -self.cfg.max_seq_len:]
             _, logits = self.forward(ctx)
             logits = logits[:, -1, :] / max(temperature, 1e-8)  # (1, vocab)
+
+            # Repetition penalty — downscale logits for already-seen tokens
+            if repetition_penalty != 1.0:
+                for token_id in set(input_ids[0].tolist()):
+                    if logits[0, token_id] > 0:
+                        logits[0, token_id] /= repetition_penalty
+                    else:
+                        logits[0, token_id] *= repetition_penalty
 
             # Top-k filtering
             if top_k > 0:
@@ -262,7 +272,6 @@ class SubhadraForCausalLM(nn.Module):
                 sorted_logits, sorted_idx = torch.sort(logits, descending=True)
                 probs_sorted = F.softmax(sorted_logits, dim=-1)
                 cum_probs    = torch.cumsum(probs_sorted, dim=-1)
-                # Shift right so the pivot token that pushes cumsum over top_p is kept
                 remove = (cum_probs - probs_sorted) > top_p
                 sorted_logits[remove] = float("-inf")
                 logits = torch.zeros_like(logits).scatter_(1, sorted_idx, sorted_logits)
