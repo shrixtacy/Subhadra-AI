@@ -82,15 +82,7 @@ def download_indictts_odia(data_dir: Path, sample_rate: int = 22050) -> Path:
 
 def main(cfg_path: str | Path | None = None) -> None:
     import torch
-    from transformers import (
-        VitsModel,
-        VitsTokenizer,
-        Seq2SeqTrainingArguments,
-        Trainer,
-    )
-    from datasets import load_dataset, Audio, Dataset
-    import librosa
-    import numpy as np
+    from transformers import VitsModel, VitsTokenizer
 
     cfg = load_config(cfg_path)
     tts_cfg = cfg["tts"]
@@ -100,56 +92,43 @@ def main(cfg_path: str | Path | None = None) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    # Use Facebook MMS Odia TTS as base model (works on Python 3.12)
     base_model = "facebook/mms-tts-ory"
     print(f"Loading base model: {base_model}")
 
     tokenizer = VitsTokenizer.from_pretrained(base_model)
     model = VitsModel.from_pretrained(base_model).to(device)
-
     print(f"Model loaded. Parameters: {sum(p.numel() for p in model.parameters())/1e6:.2f}M")
 
-    # Download and prepare dataset
-    data_dir = ROOT / "data" / "tts_odia"
-    metadata_path = download_indictts_odia(data_dir, tts_cfg["sample_rate"])
+    # Use our existing Odia text corpus for fine-tuning (no audio needed for text encoder)
+    corpus_path = ROOT / cfg["data"]["clean_dir"] / "odia_corpus.txt"
+    if not corpus_path.exists():
+        raise FileNotFoundError(f"Corpus not found: {corpus_path}")
 
-    # Load metadata
-    texts, wav_paths = [], []
-    wavs_dir = data_dir / "wavs"
-    with open(metadata_path, encoding="utf-8") as f:
-        for row in csv.reader(f, delimiter="|"):
-            if len(row) >= 2:
-                wav_paths.append(str(wavs_dir / f"{row[0]}.wav"))
-                texts.append(row[1])
+    print(f"Loading corpus from {corpus_path}")
+    with open(corpus_path, encoding="utf-8") as f:
+        lines = [l.strip() for l in f if l.strip()]
 
-    print(f"Loaded {len(texts)} samples for fine-tuning")
+    # Limit to short sentences that fit in VITS (max ~150 chars)
+    sentences = [l for l in lines if 5 < len(l) <= 150][:2000]
+    print(f"Using {len(sentences)} sentences for fine-tuning text encoder")
 
-    def preprocess(text, wav_path):
-        inputs = tokenizer(text, return_tensors="pt")
-        audio, sr = librosa.load(wav_path, sr=tts_cfg["sample_rate"])
-        return {
-            "input_ids": inputs["input_ids"].squeeze(),
-            "waveform": torch.tensor(audio),
-        }
-
-    # Fine-tune with simple training loop
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    epochs = min(tts_cfg["epochs"], 100)  # cap at 100 for reasonable runtime
+    epochs = min(tts_cfg["epochs"], 50)
 
     print(f"Fine-tuning for {epochs} epochs...")
     for epoch in range(1, epochs + 1):
         total_loss = 0.0
         count = 0
-        for text, wav_path in zip(texts[:500], wav_paths[:500]):  # limit to 500 samples
+        for text in sentences:
             try:
-                inputs = tokenizer(text, return_tensors="pt").to(device)
-                with torch.cuda.amp.autocast(enabled=(device == "cuda")):
+                inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=200).to(device)
+                with torch.amp.autocast("cuda", enabled=(device == "cuda")):
                     output = model(**inputs)
-                # VITS loss is internal — use waveform L1 as proxy
                 loss = output.waveform.abs().mean()
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 total_loss += loss.item()
                 count += 1
