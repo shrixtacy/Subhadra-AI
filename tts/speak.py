@@ -1,5 +1,5 @@
 """
-Odia TTS — uses facebook/mms-tts-ory with pitch shifting for female voice.
+Odia TTS — uses facebook/mms-tts-ory for Odia speech synthesis.
 
   OdiaTTS.speak(text, output_path)  -> saves .wav file
   OdiaTTS.speak_stream(text)        -> returns WAV bytes for streaming
@@ -23,20 +23,8 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def _pitch_shift(audio: np.ndarray, sr: int, semitones: float = 4.0) -> np.ndarray:
-    """Shift pitch up by N semitones using resampling trick (no librosa needed)."""
-    factor = 2 ** (semitones / 12.0)
-    # Speed up by factor (raises pitch), then resample back to original length
-    original_len = len(audio)
-    indices = np.linspace(0, original_len - 1, int(original_len / factor))
-    shifted = np.interp(indices, np.arange(original_len), audio)
-    # Resample back to original length
-    result_indices = np.linspace(0, len(shifted) - 1, original_len)
-    return np.interp(result_indices, np.arange(len(shifted)), shifted).astype(np.float32)
-
-
 class OdiaTTS:
-    """MMS VITS Odia TTS with pitch shift for female-sounding voice."""
+    """MMS VITS wrapper for Odia text-to-speech synthesis."""
 
     def __init__(self, model_dir: str | Path | None = None) -> None:
         from transformers import VitsModel, VitsTokenizer
@@ -82,8 +70,6 @@ class OdiaTTS:
             output = self.model(**inputs)
         wav = output.waveform[0].cpu().numpy().astype(np.float32)
         sr = self.model.config.sampling_rate
-        # Shift pitch up 4 semitones for female-sounding voice
-        wav = _pitch_shift(wav, sr, semitones=4.0)
         return wav, sr
 
 
