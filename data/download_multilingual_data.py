@@ -86,11 +86,29 @@ def download_hindi_sangraha(raw_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def download_english_wikipedia(raw_dir: Path) -> None:
-    print("\nDownloading English Wikipedia (capped 200k articles)...")
+    print("\nDownloading English Wikipedia (capped 500k articles)...")
     stream_to_file(
         "wikimedia/wikipedia", "20231101.en", "train", "text",
         raw_dir / "wikipedia_en.txt",
-        max_rows=200_000,
+        max_rows=500_000,
+    )
+
+
+def download_english_c4(raw_dir: Path) -> None:
+    print("\nDownloading C4 English (capped 1M rows)...")
+    stream_to_file(
+        "allenai/c4", "en", "train", "text",
+        raw_dir / "c4_en.txt",
+        max_rows=1_000_000,
+    )
+
+
+def download_english_openwebtext(raw_dir: Path) -> None:
+    print("\nDownloading OpenWebText (capped 500k rows)...")
+    stream_to_file(
+        "Skylion007/openwebtext", None, "train", "text",
+        raw_dir / "openwebtext_en.txt",
+        max_rows=500_000,
     )
 
 
@@ -211,6 +229,8 @@ def main() -> None:
 
     # English
     download_english_wikipedia(raw_dir)
+    download_english_c4(raw_dir)
+    download_english_openwebtext(raw_dir)
 
     # Mythology / folktales
     download_mythology_datasets(raw_dir)
@@ -225,7 +245,8 @@ def main() -> None:
 
     print("\nMerging English corpus...")
     merge_and_clean(
-        [raw_dir / "wikipedia_en.txt", raw_dir / "ramayana_en.txt",
+        [raw_dir / "wikipedia_en.txt", raw_dir / "c4_en.txt",
+         raw_dir / "openwebtext_en.txt", raw_dir / "ramayana_en.txt",
          raw_dir / "mahabharata_en.txt", raw_dir / "indian_folktales_en.txt",
          raw_dir / "puranas_en.txt"],
         clean_dir / "english_corpus.txt",

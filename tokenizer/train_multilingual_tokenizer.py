@@ -24,7 +24,7 @@ from pathlib import Path
 MAX_LINES: dict[str, int] = {
     "odia_corpus.txt":    500_000,
     "hindi_corpus.txt":   500_000,
-    "english_corpus.txt": 500_000,
+    "english_corpus.txt": 1_000_000,
 }
 DEFAULT_CAP = 500_000
 
