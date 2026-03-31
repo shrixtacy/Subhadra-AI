@@ -1,11 +1,15 @@
 """
-Subhadra terminal chat loop.
-  - Text mode: type Odia text, get Odia reply
-  - Voice mode: type 'voice' to switch, mic input + audio output
+Subhadra multilingual terminal chat loop.
+  - Supports Odia (or), Hindi (hi), English (en)
+  - Auto-detects language from input and switches TTS voice accordingly
+  - Text mode: type in any supported language, get a reply
+  - Voice mode: type 'voice' to toggle mic input + audio output
+  - 'lang or|hi|en' to force a language
   - Ctrl+C to exit
 """
 
 from __future__ import annotations
+import io
 import sys
 import yaml
 import argparse
@@ -17,7 +21,7 @@ import torch
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from tokenizer.odia_tokenizer import OdiaTokenizer
+from tokenizer.multilingual_tokenizer import MultilingualTokenizer, detect_language
 from model.subhadra import SubhadraConfig, SubhadraForCausalLM
 
 
@@ -26,8 +30,8 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def load_slm(cfg: dict, device: torch.device) -> tuple[SubhadraForCausalLM, OdiaTokenizer]:
-    tok       = OdiaTokenizer()
+def load_slm(cfg: dict, device: torch.device) -> tuple[SubhadraForCausalLM, MultilingualTokenizer]:
+    tok       = MultilingualTokenizer()
     model_cfg = SubhadraConfig(**cfg["model"])
     model     = SubhadraForCausalLM(model_cfg).to(device)
 
@@ -46,81 +50,114 @@ def load_slm(cfg: dict, device: torch.device) -> tuple[SubhadraForCausalLM, Odia
     return model, tok
 
 
-def generate(model: SubhadraForCausalLM, tok: OdiaTokenizer,
-             text: str, device: torch.device,
-             max_new_tokens: int = 200, temperature: float = 0.8) -> str:
-    ids       = tok.encode_chat(text)
+def generate(
+    model: SubhadraForCausalLM,
+    tok: MultilingualTokenizer,
+    text: str,
+    device: torch.device,
+    lang: str | None = None,
+    max_new_tokens: int = 200,
+    temperature: float = 0.8,
+) -> str:
+    ids       = tok.encode_chat(text, lang=lang)
     input_ids = torch.tensor([ids], dtype=torch.long).to(device)
-    out       = model.generate(input_ids, max_new_tokens=max_new_tokens,
-                               temperature=temperature, eos_id=tok.eos_id)
+    out       = model.generate(
+        input_ids,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        eos_id=tok.eos_id,
+    )
     return tok.decode(out[0, len(ids):].tolist())
 
 
 def record_audio(duration: int = 5, sample_rate: int = 16000) -> np.ndarray:
-    """Record from microphone using sounddevice."""
     import sounddevice as sd
-    print(f"  [ରେକର୍ଡ କରୁଛି {duration} ସେକେଣ୍ଡ...]")
+    print(f"  [Recording {duration}s — speak now...]")
     audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate,
                    channels=1, dtype="float32")
     sd.wait()
     return audio.flatten()
 
 
-def play_audio(wav_bytes: bytes, sample_rate: int = 22050) -> None:
-    """Play WAV bytes through speakers."""
+def play_audio(wav_bytes: bytes) -> None:
     import sounddevice as sd
     import soundfile as sf
-    import io
     data, sr = sf.read(io.BytesIO(wav_bytes))
     sd.play(data, sr)
     sd.wait()
 
 
+_LANG_LABELS = {"or": "Odia", "hi": "Hindi", "en": "English"}
+
+_BANNER = """
+╔══════════════════════════════════════════════════════╗
+║   Subhadra — Multilingual AI (Odia · Hindi · English) ║
+║   Indian Mythology & Folktales Edition               ║
+╠══════════════════════════════════════════════════════╣
+║  Commands:                                           ║
+║    voice          — toggle voice mode                ║
+║    lang or|hi|en  — force language                   ║
+║    Ctrl+C         — exit                             ║
+╚══════════════════════════════════════════════════════╝
+"""
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Subhadra Chat CLI")
+    parser = argparse.ArgumentParser(description="Subhadra Multilingual Chat CLI")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--max-tokens",  type=int,   default=200)
+    parser.add_argument("--lang",        type=str,   default=None,
+                        choices=["or", "hi", "en"],
+                        help="Force language (default: auto-detect)")
     args = parser.parse_args()
 
     cfg    = load_config()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"\n{'='*50}")
-    print("  ସୁଭଦ୍ରା — ଓଡ଼ିଆ AI ସହାୟକ")
+    print(_BANNER)
     print(f"  Device: {device}")
-    print("  'voice' ଟାଇପ କରନ୍ତୁ ଭଏସ ମୋଡ ପାଇଁ")
-    print("  Ctrl+C ଦ୍ୱାରା ବାହାର ହୁଅନ୍ତୁ")
-    print(f"{'='*50}\n")
 
     model, tok = load_slm(cfg, device)
 
     # Lazy-load ASR/TTS only when voice mode is activated
-    asr = None
-    tts = None
+    asr        = None
+    tts        = None
     voice_mode = False
+    forced_lang: str | None = args.lang
 
     try:
         while True:
+            lang_label = _LANG_LABELS.get(forced_lang, "auto") if forced_lang else "auto"
             try:
-                prompt = input("ଆପଣ: ").strip()
+                prompt = input(f"You [{lang_label}]: ").strip()
             except EOFError:
                 break
 
             if not prompt:
                 continue
 
+            # ── Commands ──────────────────────────────────────────────────
             if prompt.lower() == "voice":
                 if asr is None:
-                    print("ଭଏସ ମୋଡ ଲୋଡ ହେଉଛି...")
+                    print("Loading voice modules...")
                     from stt.transcribe import OdiaASR
-                    from tts.speak import OdiaTTS
+                    from tts.speak import MultilingualTTS
                     asr = OdiaASR()
-                    tts = OdiaTTS()
+                    tts = MultilingualTTS()
                 voice_mode = not voice_mode
-                print(f"ଭଏସ ମୋଡ: {'ଚାଲୁ' if voice_mode else 'ବନ୍ଦ'}")
+                print(f"Voice mode: {'ON' if voice_mode else 'OFF'}")
                 continue
 
+            if prompt.lower().startswith("lang "):
+                parts = prompt.split()
+                if len(parts) == 2 and parts[1] in ("or", "hi", "en"):
+                    forced_lang = parts[1]
+                    print(f"Language forced to: {_LANG_LABELS[forced_lang]}")
+                else:
+                    print("Usage: lang or|hi|en")
+                continue
+
+            # ── Voice input ───────────────────────────────────────────────
             if voice_mode and asr is not None:
-                # Record mic input
                 audio_array = record_audio(duration=5)
                 import soundfile as sf
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
@@ -128,19 +165,27 @@ def main() -> None:
                     tmp_path = tmp.name
                 prompt = asr.transcribe(tmp_path)
                 os.unlink(tmp_path)
-                print(f"ଆପଣ (ଭଏସ): {prompt}")
+                print(f"You (voice): {prompt}")
 
-            reply = generate(model, tok, prompt, device,
-                             max_new_tokens=args.max_tokens,
-                             temperature=args.temperature)
-            print(f"ସୁଭଦ୍ରା: {reply}\n")
+            # ── Language detection ────────────────────────────────────────
+            lang = forced_lang or detect_language(prompt)
 
+            # ── Generate reply ────────────────────────────────────────────
+            reply = generate(
+                model, tok, prompt, device,
+                lang=lang,
+                max_new_tokens=args.max_tokens,
+                temperature=args.temperature,
+            )
+            print(f"Subhadra [{_LANG_LABELS.get(lang, lang)}]: {reply}\n")
+
+            # ── Voice output (switches voice per detected language) ────────
             if voice_mode and tts is not None:
-                wav_bytes = tts.speak_stream(reply)
-                play_audio(wav_bytes, sample_rate=cfg["tts"]["sample_rate"])
+                wav_bytes = tts.speak_stream(reply, lang=lang)
+                play_audio(wav_bytes)
 
     except KeyboardInterrupt:
-        print("\nଧନ୍ୟବାଦ! ପୁଣି ଦେଖା ହେବ।")
+        print("\nThank you! ধন্যবাদ! ଧନ୍ୟବାଦ!")
 
 
 if __name__ == "__main__":

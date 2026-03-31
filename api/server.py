@@ -1,7 +1,7 @@
 """
-Subhadra FastAPI server.
+Subhadra FastAPI server — multilingual (Odia · Hindi · English).
 Endpoints:
-  POST /chat        — text in, text out
+  POST /chat        — text in, text out  (auto-detects language)
   POST /voice-chat  — audio in, audio out
   GET  /health      — model load status
 """
@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from tokenizer.odia_tokenizer import OdiaTokenizer
+from tokenizer.multilingual_tokenizer import MultilingualTokenizer, detect_language
 from model.subhadra import SubhadraConfig, SubhadraForCausalLM
 
 
@@ -37,21 +37,20 @@ def load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 class ModelState:
-    tokenizer: Optional[OdiaTokenizer]       = None
-    slm:       Optional[SubhadraForCausalLM] = None
-    asr:       Optional[object]              = None
-    tts:       Optional[object]              = None
-    device:    torch.device                  = torch.device("cpu")
-    status:    dict                          = {"slm": False, "asr": False, "tts": False}
+    tokenizer: Optional[MultilingualTokenizer] = None
+    slm:       Optional[SubhadraForCausalLM]   = None
+    asr:       Optional[object]                = None
+    tts:       Optional[object]                = None
+    device:    torch.device                    = torch.device("cpu")
+    status:    dict = {"slm": False, "asr": False, "tts": False}
 
 state = ModelState()
 
 
 def _load_slm(cfg: dict) -> None:
-    state.tokenizer = OdiaTokenizer()
+    state.tokenizer = MultilingualTokenizer()
     model_cfg = SubhadraConfig(**cfg["model"])
     state.slm = SubhadraForCausalLM(model_cfg).to(state.device)
-    # Load best SFT checkpoint if available
     sft_dir = Path(cfg["sft"]["checkpoint_dir"])
     ckpts   = sorted(sft_dir.glob("sft_epoch*.pt")) if sft_dir.exists() else []
     if not ckpts:
@@ -78,8 +77,8 @@ def _load_asr(cfg: dict) -> None:
 
 def _load_tts(cfg: dict) -> None:
     try:
-        from tts.speak import OdiaTTS
-        state.tts = OdiaTTS()
+        from tts.speak import MultilingualTTS
+        state.tts = MultilingualTTS()
         state.status["tts"] = True
     except Exception as e:
         print(f"TTS load failed (non-fatal): {e}")
@@ -103,7 +102,12 @@ async def lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Subhadra", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Subhadra",
+    version="2.0.0",
+    description="Multilingual AI — Odia · Hindi · English with Indian mythology knowledge",
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -118,27 +122,36 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class ChatRequest(BaseModel):
-    message: str
-    mode:    str = "text"
-    max_new_tokens: int = 200
+    message:        str
+    lang:           Optional[str] = None   # "or" | "hi" | "en" | None (auto)
+    max_new_tokens: int   = 200
     temperature:    float = 0.8
     top_k:          int   = 50
     top_p:          float = 0.9
 
 
 class ChatResponse(BaseModel):
-    reply: str
-    mode:  str
+    reply:           str
+    detected_lang:   str
+    response_lang:   str
 
 
 # ---------------------------------------------------------------------------
 # Inference helpers
 # ---------------------------------------------------------------------------
 
-def _generate_reply(message: str, max_new_tokens: int, temperature: float,
-                    top_k: int, top_p: float) -> str:
+def _generate_reply(
+    message: str,
+    lang: str | None,
+    max_new_tokens: int,
+    temperature: float,
+    top_k: int,
+    top_p: float,
+) -> tuple[str, str]:
+    """Returns (reply_text, detected_lang)."""
+    detected = lang or detect_language(message)
     tok = state.tokenizer
-    ids = tok.encode_chat(message)
+    ids = tok.encode_chat(message, lang=detected)
     input_ids = torch.tensor([ids], dtype=torch.long).to(state.device)
     out = state.slm.generate(
         input_ids,
@@ -148,8 +161,8 @@ def _generate_reply(message: str, max_new_tokens: int, temperature: float,
         top_p=top_p,
         eos_id=tok.eos_id,
     )
-    new_ids = out[0, len(ids):].tolist()
-    return tok.decode(new_ids)
+    reply = tok.decode(out[0, len(ids):].tolist())
+    return reply, detected
 
 
 # ---------------------------------------------------------------------------
@@ -165,16 +178,20 @@ async def health() -> dict:
 async def chat(req: ChatRequest) -> ChatResponse:
     if not state.status["slm"]:
         raise HTTPException(503, "SLM not loaded")
-    loop  = asyncio.get_event_loop()
-    reply = await loop.run_in_executor(
+    loop = asyncio.get_event_loop()
+    reply, detected = await loop.run_in_executor(
         None, _generate_reply,
-        req.message, req.max_new_tokens, req.temperature, req.top_k, req.top_p,
+        req.message, req.lang,
+        req.max_new_tokens, req.temperature, req.top_k, req.top_p,
     )
-    return ChatResponse(reply=reply, mode="text")
+    return ChatResponse(reply=reply, detected_lang=detected, response_lang=detected)
 
 
 @app.post("/voice-chat")
-async def voice_chat(audio: UploadFile = File(...)) -> StreamingResponse:
+async def voice_chat(
+    audio: UploadFile = File(...),
+    lang:  str | None = None,
+) -> StreamingResponse:
     if not state.status["slm"]:
         raise HTTPException(503, "SLM not loaded")
     if not state.status["asr"]:
@@ -182,7 +199,6 @@ async def voice_chat(audio: UploadFile = File(...)) -> StreamingResponse:
     if not state.status["tts"]:
         raise HTTPException(503, "TTS model not loaded")
 
-    # Save upload to temp file
     import tempfile, os
     suffix = Path(audio.filename).suffix if audio.filename else ".wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -192,15 +208,25 @@ async def voice_chat(audio: UploadFile = File(...)) -> StreamingResponse:
     loop = asyncio.get_event_loop()
     try:
         # STT
-        odia_text = await loop.run_in_executor(None, state.asr.transcribe, tmp_path)
+        transcribed = await loop.run_in_executor(None, state.asr.transcribe, tmp_path)
+        # Language detection
+        detected_lang = lang or detect_language(transcribed)
         # SLM
-        reply_text = await loop.run_in_executor(None, _generate_reply, odia_text, 200, 0.8, 50, 0.9)
-        # TTS
-        wav_bytes  = await loop.run_in_executor(None, state.tts.speak_stream, reply_text)
+        reply_text, _ = await loop.run_in_executor(
+            None, _generate_reply, transcribed, detected_lang, 200, 0.8, 50, 0.9
+        )
+        # TTS — use detected language so voice switches automatically
+        wav_bytes = await loop.run_in_executor(
+            None, state.tts.speak_stream, reply_text, detected_lang
+        )
     finally:
         os.unlink(tmp_path)
 
-    return StreamingResponse(io.BytesIO(wav_bytes), media_type="audio/wav")
+    return StreamingResponse(
+        io.BytesIO(wav_bytes),
+        media_type="audio/wav",
+        headers={"X-Detected-Language": detected_lang},
+    )
 
 
 if __name__ == "__main__":
