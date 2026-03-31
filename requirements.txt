@@ -17,3 +17,13 @@ accelerate>=0.24.0
 evaluate>=0.4.0
 python-multipart>=0.0.6
 huggingface_hub>=0.20.0
+
+# Multilingual TTS
+# Option A — Coqui TTS (offline, female LJSpeech voice for English)
+TTS>=0.22.0
+
+# Option B — gTTS fallback (requires internet, no install beyond this)
+gtts>=2.5.0
+
+# Language detection (lightweight, no model download needed)
+langdetect>=1.0.9

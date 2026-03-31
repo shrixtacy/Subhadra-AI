@@ -2,7 +2,9 @@
 
 tokenizer:
   vocab_size: 32000
+  multilingual_vocab_size: 48000
   model_prefix: tokenizer/odia_spm
+  multilingual_model_prefix: tokenizer/multilingual_spm
   character_coverage: 0.9999
   model_type: bpe
   special_tokens:
@@ -11,12 +13,26 @@ tokenizer:
     - "<bos>"
     - "<eos>"
     - "<sep>"
+    - "<lang:or>"
+    - "<lang:hi>"
+    - "<lang:en>"
 
 data:
   indiccorp_lang: or
   cc100_lang: or
   raw_dir: data/raw
   clean_dir: data/clean
+  languages:
+    - or
+    - hi
+    - en
+  mythology_topics:
+    - ramayana
+    - mahabharata
+    - puranas
+    - panchatantra
+    - jataka
+    - folktales
 
 model:
   n_layers: 8
@@ -46,6 +62,7 @@ sft:
   batch_size: 8
   checkpoint_dir: train/sft_checkpoints
   data_path: data/odia_sft.jsonl
+  multilingual_data_path: data/multilingual_sft.jsonl
 
 stt:
   base_model: openai/whisper-small
@@ -60,6 +77,10 @@ tts:
   batch_size: 16
   epochs: 1000
   output_dir: tts/vits_odia
+  voices:
+    or: facebook/mms-tts-ory
+    hi: facebook/mms-tts-hin
+    en: tts_models/en/ljspeech/vits   # Coqui TTS (female LJSpeech)
 
 api:
   host: 0.0.0.0
